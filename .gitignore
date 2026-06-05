@@ -1,0 +1,5 @@
+.env
+trips.db
+__pycache__/
+*.pyc
+*.pyo
