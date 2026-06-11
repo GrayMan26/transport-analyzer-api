@@ -246,6 +246,43 @@ def calc_route_stateless(body: RouteCalcBody):
     return result
 
 
+# ── ORS diagnostics ──────────────────────────────────────────────────────────
+
+@app.get("/debug/ors")
+def debug_ors():
+    """Test ORS API key and geocoding from this server. Useful for diagnosing Render env issues."""
+    test_addr = "Newark, DE 19713"
+    result = {"ors_key_set": bool(ORS_API_KEY)}
+
+    # Test ORS geocode
+    try:
+        r = requests.get(
+            "https://api.openrouteservice.org/geocode/search",
+            params={"api_key": ORS_API_KEY, "text": test_addr, "size": 1},
+            timeout=10,
+        )
+        result["ors_geocode_status"] = r.status_code
+        result["ors_geocode_ok"] = r.status_code == 200 and bool(r.json().get("features"))
+        if not result["ors_geocode_ok"]:
+            result["ors_geocode_body"] = r.text[:300]
+    except Exception as e:
+        result["ors_geocode_error"] = str(e)
+
+    # Test Nominatim geocode (fallback)
+    try:
+        rn = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": test_addr, "format": "json", "limit": 1, "countrycodes": "us"},
+            headers={"User-Agent": "GrayTech-TransportAnalyzer/1.0"},
+            timeout=10,
+        )
+        result["nominatim_ok"] = rn.status_code == 200 and bool(rn.json())
+    except Exception as e:
+        result["nominatim_error"] = str(e)
+
+    return result
+
+
 # ── Address suggestions ───────────────────────────────────────────────────────
 
 @app.get("/geocode/suggest")
