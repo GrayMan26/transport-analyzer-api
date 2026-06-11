@@ -54,7 +54,7 @@ def calculate_route(addresses: list[str], api_key: str) -> dict:
         )
 
     r = requests.post(
-        f"{ORS_BASE}/v2/directions/driving-hgv",
+        f"{ORS_BASE}/v2/directions/driving-car",
         headers={
             "Authorization": api_key,
             "Content-Type":  "application/json",
@@ -66,7 +66,14 @@ def calculate_route(addresses: list[str], api_key: str) -> dict:
         },
         timeout=30,
     )
-    r.raise_for_status()
+    try:
+        r.raise_for_status()
+    except Exception:
+        try:
+            detail = r.json().get("error", {}).get("message", r.text[:200])
+        except Exception:
+            detail = r.text[:200]
+        raise ValueError(f"ORS routing failed: {detail}")
 
     summary = r.json()["routes"][0]["summary"]
     return {
