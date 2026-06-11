@@ -7,6 +7,7 @@ import os
 import tempfile
 from typing import AsyncGenerator
 
+import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -243,6 +244,47 @@ def calc_route_stateless(body: RouteCalcBody):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return result
+
+
+# ── Address suggestions ───────────────────────────────────────────────────────
+
+@app.get("/geocode/suggest")
+def geocode_suggest(text: str = ""):
+    """Return up to 5 geocodable address suggestions for the given text."""
+    if not ORS_API_KEY or len(text.strip()) < 2:
+        return {"suggestions": []}
+    try:
+        r = requests.get(
+            "https://api.openrouteservice.org/geocode/search",
+            params={"api_key": ORS_API_KEY, "text": text, "size": 6},
+            timeout=8,
+        )
+        r.raise_for_status()
+        features = r.json().get("features", [])
+        suggestions = []
+        seen: set[str] = set()
+        for f in features:
+            props = f.get("properties", {})
+            name     = props.get("name", "").strip()
+            region_a = props.get("region_a", "").strip()
+            postal   = props.get("postalcode", "").strip()
+            if not name:
+                continue
+            if region_a and postal:
+                label = f"{name}, {region_a} {postal}"
+            elif region_a:
+                label = f"{name}, {region_a}"
+            else:
+                label = props.get("label", name)
+            if label not in seen:
+                seen.add(label)
+                suggestions.append(label)
+            if len(suggestions) == 5:
+                break
+        return {"suggestions": suggestions}
+    except Exception as e:
+        log.warning("Geocode suggest failed: %s", e)
+        return {"suggestions": []}
 
 
 # ── Import ────────────────────────────────────────────────────────────────────
