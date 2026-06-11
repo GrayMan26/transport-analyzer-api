@@ -287,40 +287,76 @@ def debug_ors():
 
 @app.get("/geocode/suggest")
 def geocode_suggest(text: str = ""):
-    """Return up to 5 geocodable address suggestions for the given text."""
-    if not ORS_API_KEY or len(text.strip()) < 2:
+    """Return up to 5 address suggestions via ORS (preferred) or Nominatim (fallback)."""
+    if len(text.strip()) < 2:
         return {"suggestions": []}
+
+    # Try ORS first if key is available
+    if ORS_API_KEY:
+        try:
+            r = requests.get(
+                "https://api.openrouteservice.org/geocode/search",
+                params={"api_key": ORS_API_KEY, "text": text, "size": 6},
+                timeout=8,
+            )
+            r.raise_for_status()
+            features = r.json().get("features", [])
+            suggestions, seen = [], set()
+            for f in features:
+                props    = f.get("properties", {})
+                name     = props.get("name", "").strip()
+                region_a = props.get("region_a", "").strip()
+                postal   = props.get("postalcode", "").strip()
+                if not name:
+                    continue
+                label = f"{name}, {region_a} {postal}".strip(", ") if region_a else props.get("label", name)
+                if region_a and postal:
+                    label = f"{name}, {region_a} {postal}"
+                elif region_a:
+                    label = f"{name}, {region_a}"
+                if label not in seen:
+                    seen.add(label)
+                    suggestions.append(label)
+                if len(suggestions) == 5:
+                    break
+            if suggestions:
+                return {"suggestions": suggestions}
+        except Exception as e:
+            log.warning("ORS suggest failed (%s) — falling back to Nominatim", e)
+
+    # Nominatim fallback
     try:
-        r = requests.get(
-            "https://api.openrouteservice.org/geocode/search",
-            params={"api_key": ORS_API_KEY, "text": text, "size": 6},
-            timeout=8,
+        import time
+        time.sleep(1.1)   # respect Nominatim rate limit
+        rn = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": text, "format": "json", "limit": 5, "countrycodes": "us",
+                    "addressdetails": "1"},
+            headers={"User-Agent": "GrayTech-TransportAnalyzer/1.0"},
+            timeout=10,
         )
-        r.raise_for_status()
-        features = r.json().get("features", [])
-        suggestions = []
-        seen: set[str] = set()
-        for f in features:
-            props = f.get("properties", {})
-            name     = props.get("name", "").strip()
-            region_a = props.get("region_a", "").strip()
-            postal   = props.get("postalcode", "").strip()
-            if not name:
+        rn.raise_for_status()
+        results = rn.json()
+        suggestions, seen = [], set()
+        for res in results:
+            addr = res.get("address", {})
+            city    = addr.get("city") or addr.get("town") or addr.get("village") or addr.get("county", "")
+            state   = addr.get("state_code") or addr.get("state", "")
+            postal  = addr.get("postcode", "")
+            if not city:
                 continue
-            if region_a and postal:
-                label = f"{name}, {region_a} {postal}"
-            elif region_a:
-                label = f"{name}, {region_a}"
+            if state and postal:
+                label = f"{city}, {state.upper()} {postal}"
+            elif state:
+                label = f"{city}, {state.upper()}"
             else:
-                label = props.get("label", name)
+                label = city
             if label not in seen:
                 seen.add(label)
                 suggestions.append(label)
-            if len(suggestions) == 5:
-                break
-        return {"suggestions": suggestions}
+        return {"suggestions": suggestions[:5]}
     except Exception as e:
-        log.warning("Geocode suggest failed: %s", e)
+        log.warning("Nominatim suggest failed: %s", e)
         return {"suggestions": []}
 
 
