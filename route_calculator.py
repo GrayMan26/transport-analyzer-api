@@ -75,43 +75,68 @@ def get_suggestions(address: str, max_results: int = 5) -> list[str]:
     """Return up to max_results geocodable address alternatives for a failed address."""
     global _nominatim_last
     variants = _address_variants(address)
-    search_query = variants[0] if variants else address
-    wait = 1.1 - (time.time() - _nominatim_last)
-    if wait > 0:
-        time.sleep(wait)
-    try:
-        r = requests.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={
-                "q": search_query, "format": "json", "limit": max_results,
-                "countrycodes": "us", "addressdetails": "1",
-            },
-            headers={"User-Agent": "GrayTech-TransportAnalyzer/1.0"},
-            timeout=12,
-        )
-        _nominatim_last = time.time()
-        r.raise_for_status()
-        suggestions: list[str] = []
-        seen: set[str] = set()
-        for res in r.json():
-            addr = res.get("address", {})
-            city = (
-                addr.get("city") or addr.get("town") or
-                addr.get("village") or addr.get("county", "")
+
+    # Build search candidates: simplified variants first (most reliable)
+    candidates: list[str] = list(variants)
+
+    # Strip stray special characters (e.g. "Townshi[ NJ" → "Townshi NJ")
+    cleaned = re.sub(r'[^\w\s,.\-]', ' ', address)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    if cleaned.lower() != address.lower() and cleaned not in candidates:
+        candidates.insert(0, cleaned)
+
+    # If there are no variants the address has no commas — try to detect a trailing
+    # state abbreviation and reformat as "city portion, ST"
+    if not variants:
+        tokens = address.split()
+        _state_values = set(_STATE_ABBR.values())
+        if tokens and tokens[-1].upper() in _state_values:
+            city_part = ' '.join(tokens[:-1])
+            candidates.append(f"{city_part}, {tokens[-1].upper()}")
+
+    if not candidates:
+        candidates = [address]
+
+    seen: set[str] = set()
+    suggestions: list[str] = []
+
+    for search_query in candidates[:3]:
+        wait = 1.1 - (time.time() - _nominatim_last)
+        if wait > 0:
+            time.sleep(wait)
+        try:
+            r = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={
+                    "q": search_query, "format": "json", "limit": max_results,
+                    "countrycodes": "us", "addressdetails": "1",
+                },
+                headers={"User-Agent": "GrayTech-TransportAnalyzer/1.0"},
+                timeout=12,
             )
-            state = addr.get("state_code") or addr.get("state", "")
-            postal = addr.get("postcode", "")
-            if not city:
-                continue
-            state_abbr = _STATE_ABBR.get(state.lower(), state.upper()[:2])
-            label = f"{city}, {state_abbr} {postal}".strip() if postal else f"{city}, {state_abbr}"
-            if label not in seen:
-                seen.add(label)
-                suggestions.append(label)
-        return suggestions[:max_results]
-    except Exception as e:
-        log.warning("Suggestion fetch failed for '%s': %s", address, e)
-        return []
+            _nominatim_last = time.time()
+            r.raise_for_status()
+            for res in r.json():
+                addr = res.get("address", {})
+                city = (
+                    addr.get("city") or addr.get("town") or
+                    addr.get("village") or addr.get("county", "")
+                )
+                state = addr.get("state_code") or addr.get("state", "")
+                postal = addr.get("postcode", "")
+                if not city:
+                    continue
+                state_abbr = _STATE_ABBR.get(state.lower(), state.upper()[:2])
+                label = f"{city}, {state_abbr} {postal}".strip() if postal else f"{city}, {state_abbr}"
+                if label not in seen:
+                    seen.add(label)
+                    suggestions.append(label)
+            if suggestions:
+                return suggestions[:max_results]
+        except Exception as e:
+            log.warning("Suggestion fetch failed for '%s': %s", search_query, e)
+
+    return suggestions[:max_results]
 
 
 # ── Geocoding ─────────────────────────────────────────────────────────────────
