@@ -283,6 +283,24 @@ def debug_ors():
     return result
 
 
+# ── Geocode test endpoint ─────────────────────────────────────────────────────
+
+@app.get("/debug/geocode")
+def debug_geocode(address: str = "100 Continental Dr, Newark, Delaware 19713, US"):
+    """Test geocoding for any address. Shows the resolved coordinates or failure reason."""
+    from route_calculator import geocode_address, _address_variants, _geocode_cache
+    _geocode_cache.clear()
+    coord = geocode_address(address, ORS_API_KEY)
+    variants = _address_variants(address)
+    return {
+        "address":   address,
+        "resolved":  coord is not None,
+        "lon":       coord[0] if coord else None,
+        "lat":       coord[1] if coord else None,
+        "variants_tried": variants,
+    }
+
+
 # ── Address suggestions ───────────────────────────────────────────────────────
 
 @app.get("/geocode/suggest")
