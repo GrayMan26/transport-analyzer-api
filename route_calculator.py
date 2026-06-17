@@ -71,6 +71,49 @@ def _address_variants(address: str) -> list[str]:
     return result
 
 
+def get_suggestions(address: str, max_results: int = 5) -> list[str]:
+    """Return up to max_results geocodable address alternatives for a failed address."""
+    global _nominatim_last
+    variants = _address_variants(address)
+    search_query = variants[0] if variants else address
+    wait = 1.1 - (time.time() - _nominatim_last)
+    if wait > 0:
+        time.sleep(wait)
+    try:
+        r = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={
+                "q": search_query, "format": "json", "limit": max_results,
+                "countrycodes": "us", "addressdetails": "1",
+            },
+            headers={"User-Agent": "GrayTech-TransportAnalyzer/1.0"},
+            timeout=12,
+        )
+        _nominatim_last = time.time()
+        r.raise_for_status()
+        suggestions: list[str] = []
+        seen: set[str] = set()
+        for res in r.json():
+            addr = res.get("address", {})
+            city = (
+                addr.get("city") or addr.get("town") or
+                addr.get("village") or addr.get("county", "")
+            )
+            state = addr.get("state_code") or addr.get("state", "")
+            postal = addr.get("postcode", "")
+            if not city:
+                continue
+            state_abbr = _STATE_ABBR.get(state.lower(), state.upper()[:2])
+            label = f"{city}, {state_abbr} {postal}".strip() if postal else f"{city}, {state_abbr}"
+            if label not in seen:
+                seen.add(label)
+                suggestions.append(label)
+        return suggestions[:max_results]
+    except Exception as e:
+        log.warning("Suggestion fetch failed for '%s': %s", address, e)
+        return []
+
+
 # ── Geocoding ─────────────────────────────────────────────────────────────────
 
 def _nominatim_geocode(address: str) -> tuple[float, float] | None:
@@ -231,8 +274,16 @@ def calculate_route(addresses: list[str], api_key: str) -> dict:
         else:
             raise ValueError(f"Route calculation failed (OSRM): {e}")
 
+    unique_failed = list(dict.fromkeys(failed))
+    suggestions: dict[str, list[str]] = {}
+    for addr in unique_failed:
+        sugg = get_suggestions(addr)
+        if sugg:
+            suggestions[addr] = sugg
+
     return {
         "total_miles":   miles,
         "total_minutes": minutes,
         "failed":        failed,
+        "suggestions":   suggestions,
     }

@@ -164,9 +164,10 @@ def calc_trip_route(trip_id: int, body: RouteBody):
         trip["status"], trip["is_multiday"],
     )
     return {
-        "miles": result["total_miles"],
+        "miles":         result["total_miles"],
         "drive_minutes": result["total_minutes"],
-        "failed": result.get("failed", []),
+        "failed":        result.get("failed", []),
+        "suggestions":   result.get("suggestions", {}),
     }
 
 
@@ -208,11 +209,12 @@ async def bulk_route_sse():
                     trip["status"], trip["is_multiday"],
                 )
                 payload = json.dumps({
-                    "conf": trip["confirmation_number"],
-                    "status": "ok",
-                    "miles": result["total_miles"],
+                    "conf":          trip["confirmation_number"],
+                    "status":        "ok",
+                    "miles":         result["total_miles"],
                     "drive_minutes": result["total_minutes"],
-                    "failed": result.get("failed", []),
+                    "failed":        result.get("failed", []),
+                    "suggestions":   result.get("suggestions", {}),
                 })
             except Exception as e:
                 payload = json.dumps({
@@ -232,18 +234,28 @@ async def bulk_route_sse():
 
 class RouteCalcBody(BaseModel):
     addresses: list[str]
+    use_home_base: bool = True
 
 @app.post("/calculate-route")
 def calc_route_stateless(body: RouteCalcBody):
     if not ORS_API_KEY:
         raise HTTPException(500, "ORS_API_KEY not configured")
-    if len(body.addresses) < 2:
+    addresses = body.addresses
+    if body.use_home_base:
+        middle = [a for a in addresses if a.strip().lower() != HOME_BASE.lower()]
+        addresses = [HOME_BASE] + middle + [HOME_BASE]
+    if len(addresses) < 2:
         raise HTTPException(400, "Need at least 2 addresses")
     try:
-        result = calculate_route(body.addresses, ORS_API_KEY)
+        result = calculate_route(addresses, ORS_API_KEY)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return result
+    return {
+        "total_miles":   result["total_miles"],
+        "total_minutes": result["total_minutes"],
+        "failed":        result.get("failed", []),
+        "suggestions":   result.get("suggestions", {}),
+    }
 
 
 # ── ORS diagnostics ──────────────────────────────────────────────────────────
